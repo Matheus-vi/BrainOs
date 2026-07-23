@@ -38,3 +38,20 @@ Todos compartilhando um único núcleo inteligente chamado CoreBrain.
 Versão atual: 0.1
 
 BrainOS 0.1 — Echo
+
+
+
+Sistema Operacional
+Windows 11
+
+Node.js
+22 LTS
+
+npm
+12.x
+
+Git
+2.x
+
+VS Code
+Última versão estável

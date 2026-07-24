@@ -1,9 +1,13 @@
-function Footer() {
-  return (
-    <footer>
-      <small>BrainOS © 2026</small>
-    </footer>
-  );
-}
+export default function Footer(){
 
-export default Footer;
+return(
+
+<footer className="panel">
+
+Listening to the world...
+
+</footer>
+
+)
+
+}

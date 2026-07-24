@@ -1,13 +1,15 @@
-import StatusPanel from "./StatusPanel";
+export default function Dashboard(){
 
-function Dashboard() {
-  return (
-    <main>
-      <h2>🎮 GameBrain</h2>
+return(
 
-      <StatusPanel />
-    </main>
-  );
+<section className="panel">
+
+<h2>Dashboard</h2>
+
+<p>Workspace GameBrain</p>
+
+</section>
+
+)
+
 }
-
-export default Dashboard;

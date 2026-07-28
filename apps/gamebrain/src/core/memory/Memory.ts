@@ -1,28 +1,32 @@
-type MemoryEvent = {
-  timestamp: Date;
-  event: string;
-  payload?: unknown;
+type MemoryState = {
+  audioRunning: boolean;
+  lastEvent: string;
+  lastMessage: string;
+  version: string;
 };
 
 class Memory {
-  private history: MemoryEvent[] = [];
+  private state: MemoryState = {
+    audioRunning: false,
+    lastEvent: "system:start",
+    lastMessage: "BrainOS initialized",
+    version: "0.1.0",
+  };
 
-  add(event: string, payload?: unknown) {
-    this.history.push({
-      timestamp: new Date(),
-      event,
-      payload,
-    });
-
-    console.log("🧠 Memory:", this.history.at(-1));
+  getState() {
+    return this.state;
   }
 
-  getAll() {
-    return this.history;
+  setAudioRunning(value: boolean) {
+    this.state.audioRunning = value;
   }
 
-  clear() {
-    this.history = [];
+  setLastEvent(event: string) {
+    this.state.lastEvent = event;
+  }
+
+  setLastMessage(message: string) {
+    this.state.lastMessage = message;
   }
 }
 

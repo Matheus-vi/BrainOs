@@ -1,40 +1,54 @@
-import { createContext, useContext, useState, ReactNode } from "react";
-
+import AudioService from "../agents/AudioAgent/services/AudioService";
 import EventBus from "../core/events/EventBus";
-import AudioService from "../services/AudioService";
+
+import {
+  createContext,
+  useContext,
+  useState,
+  ReactNode,
+} from "react";
+
+export type AudioStatus =
+  | "idle"
+  | "starting"
+  | "running"
+  | "stopped"
+  | "error";
 
 type AudioContextType = {
-  running: boolean;
+  status: AudioStatus;
   startAudio: () => Promise<void>;
   stopAudio: () => void;
 };
 
 const AudioContext = createContext<AudioContextType | undefined>(undefined);
 
-type AudioProviderProps = {
+type Props = {
   children: ReactNode;
 };
 
-export function AudioProvider({ children }: AudioProviderProps) {
-  const [running, setRunning] = useState(false);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+export function AudioProvider({ children }: Props) {
+  const [status, setStatus] = useState<AudioStatus>("idle");
 
   async function startAudio() {
-    const audioStream = await AudioService.start();
+    setStatus("starting");
 
-    if (!audioStream) return;
+    const success = await AudioService.start();
 
-    setStream(audioStream);
-    setRunning(true);
+    if (!success) {
+      setStatus("error");
+      EventBus.emit("audio:error");
+      return;
+    }
 
+    setStatus("running");
     EventBus.emit("audio:start");
   }
 
   function stopAudio() {
-    AudioService.stop(stream);
+    AudioService.stop();
 
-    setRunning(false);
-    setStream(null);
+    setStatus("stopped");
 
     EventBus.emit("audio:stop");
   }
@@ -42,7 +56,7 @@ export function AudioProvider({ children }: AudioProviderProps) {
   return (
     <AudioContext.Provider
       value={{
-        running,
+        status,
         startAudio,
         stopAudio,
       }}
@@ -56,7 +70,9 @@ export function useAudio() {
   const context = useContext(AudioContext);
 
   if (!context) {
-    throw new Error("useAudio precisa estar dentro do AudioProvider");
+    throw new Error(
+      "useAudio precisa estar dentro do AudioProvider"
+    );
   }
 
   return context;

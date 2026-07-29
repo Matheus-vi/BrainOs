@@ -28,8 +28,8 @@ function getStageMessage(progress: TranslationProgress): string {
         : "Carregando tokenizer...";
     case "downloading":
       return progress.file
-        ? `Baixando modelo: ${progress.file}`
-        : "Baixando modelo...";
+        ? `Carregando modelo completo de tradução. O primeiro download pode demorar alguns minutos. Arquivo: ${progress.file}`
+        : "Carregando modelo completo de tradução. O primeiro download pode demorar alguns minutos.";
     case "creating-pipeline":
       return "Preparando modelo...";
     case "model-ready":
@@ -93,6 +93,7 @@ export default function TranslationPanel() {
 
       setTranslatedText(translation);
     } catch (error: unknown) {
+      console.error("[Translation] Erro original", error);
       const message = getErrorMessage(error);
 
       setErrorMessage(message);

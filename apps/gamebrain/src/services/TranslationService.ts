@@ -4,7 +4,7 @@ import type {
 } from "@huggingface/transformers";
 
 const MODEL_NAME = "Xenova/opus-mt-en-ROMANCE";
-const MODEL_LOAD_TIMEOUT_MS = 180_000;
+const TARGET_LANGUAGE_TOKEN = ">>pt_BR<<";
 const INFERENCE_TIMEOUT_MS = 60_000;
 
 export type TranslationProgressStage =
@@ -44,6 +44,22 @@ export class TranslationError extends Error {
 
 export function isTranslationModelLoaded(): boolean {
   return translator !== null;
+}
+
+function getSafeErrorMessage(error: unknown): string {
+  if (error instanceof DOMException) {
+    return `${error.name}: ${error.message}`;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  return "Erro desconhecido ao carregar o modelo";
 }
 
 function clampPercentage(value: number): number {
@@ -135,13 +151,64 @@ function withTimeout<T>(
   });
 }
 
-type LoadAttemptState = {
-  active: boolean;
+type TokenizerEncodeOptions = {
+  text_pair?: string | null;
+  add_special_tokens?: boolean;
+  return_token_type_ids?: boolean | null;
 };
+
+type TokenizerEncoding = {
+  input_ids: number[];
+  attention_mask: number[];
+  token_type_ids?: number[];
+};
+
+type TargetLanguageTokenizer = {
+  convert_tokens_to_ids(token: string): number | undefined;
+  _encode_plus(
+    text: string,
+    options?: TokenizerEncodeOptions,
+  ): TokenizerEncoding;
+};
+
+function configureTargetLanguageToken(
+  translationPipeline: TranslationPipeline,
+): void {
+  const tokenizer =
+    translationPipeline.tokenizer as unknown as TargetLanguageTokenizer;
+  const targetLanguageTokenId = tokenizer.convert_tokens_to_ids(
+    TARGET_LANGUAGE_TOKEN,
+  );
+
+  if (typeof targetLanguageTokenId !== "number") {
+    throw new TranslationError(
+      `O tokenizer não reconheceu ${TARGET_LANGUAGE_TOKEN} como token de idioma.`,
+    );
+  }
+
+  const originalEncodePlus = tokenizer._encode_plus.bind(tokenizer);
+  const preparedPrefix = `${TARGET_LANGUAGE_TOKEN} `;
+
+  tokenizer._encode_plus = (text, options = {}) => {
+    if (!text.startsWith(preparedPrefix)) {
+      return originalEncodePlus(text, options);
+    }
+
+    const encoded = originalEncodePlus(
+      text.slice(preparedPrefix.length),
+      options,
+    );
+
+    return {
+      ...encoded,
+      input_ids: [targetLanguageTokenId, ...encoded.input_ids],
+      attention_mask: [1, ...encoded.attention_mask],
+    };
+  };
+}
 
 async function createTranslatorAttempt(
   onProgress?: TranslationProgressCallback,
-  attemptState: LoadAttemptState = { active: true },
 ): Promise<TranslationPipeline> {
   reportProgress(onProgress, { stage: "importing-library" });
 
@@ -151,13 +218,10 @@ async function createTranslatorAttempt(
     console.info("[Translation] Biblioteca importada");
     reportProgress(onProgress, { stage: "creating-pipeline" });
 
+    console.info("[Translation] Dtype selecionado: fp32");
     const pipelinePromise = pipeline("translation", MODEL_NAME, {
-      dtype: "q8",
+      dtype: "fp32",
       progress_callback: (event: ProgressInfo) => {
-        if (!attemptState.active) {
-          return;
-        }
-
         console.info(
           "[Translation] Progresso",
           getProgressLogEvent(event),
@@ -167,20 +231,21 @@ async function createTranslatorAttempt(
     });
 
     const loadedTranslator = await pipelinePromise;
+    configureTargetLanguageToken(loadedTranslator);
 
-    if (attemptState.active) {
-      console.info("[Translation] Pipeline pronta");
-      reportProgress(onProgress, { stage: "model-ready" });
-    }
+    console.info("[Translation] Pipeline pronta");
+    reportProgress(onProgress, { stage: "model-ready" });
 
     return loadedTranslator;
   } catch (error: unknown) {
-    if (error instanceof TranslationError) {
-      throw error;
-    }
+    console.error("[Translation] Erro original", error);
+    console.error("[Translation] Falha ao criar pipeline", {
+      name: error instanceof Error ? error.name : "UnknownError",
+      message: error instanceof Error ? error.message : String(error),
+    });
 
     throw new TranslationError(
-      "Não foi possível carregar o modelo de tradução local.",
+      `Não foi possível carregar o modelo de tradução local.\nDetalhes: ${getSafeErrorMessage(error)}`,
       error,
     );
   }
@@ -189,17 +254,7 @@ async function createTranslatorAttempt(
 async function createTranslator(
   onProgress?: TranslationProgressCallback,
 ): Promise<TranslationPipeline> {
-  const attemptState: LoadAttemptState = { active: true };
-
-  try {
-    return await withTimeout(
-      createTranslatorAttempt(onProgress, attemptState),
-      MODEL_LOAD_TIMEOUT_MS,
-      "O carregamento do modelo excedeu o limite de 180 segundos. Verifique a conexão e tente novamente.",
-    );
-  } finally {
-    attemptState.active = false;
-  }
+  return createTranslatorAttempt(onProgress);
 }
 
 async function loadTranslator(
@@ -217,6 +272,7 @@ async function loadTranslator(
         return loadedTranslator;
       })
       .catch((error: unknown) => {
+        console.error("[Translation] Erro original", error);
         translatorPromise = null;
         throw error;
       });
@@ -246,7 +302,11 @@ function describeValue(value: unknown): string {
   return typeof value;
 }
 
-function extractTranslation(result: unknown): string {
+function extractTranslation(
+  result: unknown,
+  originalText: string,
+  preparedText: string,
+): string {
   if (!isUnknownArray(result)) {
     throw new TranslationError(
       `Formato inesperado: esperado array, recebido ${describeValue(result)}.`,
@@ -282,7 +342,19 @@ function extractTranslation(result: unknown): string {
     );
   }
 
-  return translatedText;
+  const normalizedTranslation = translatedText.trim();
+
+  if (
+    normalizedTranslation === originalText ||
+    normalizedTranslation === preparedText ||
+    normalizedTranslation.includes(TARGET_LANGUAGE_TOKEN)
+  ) {
+    throw new TranslationError(
+      "O tokenizer do modelo multilíngue é incompatível com a seleção de idioma no runtime atual.",
+    );
+  }
+
+  return normalizedTranslation;
 }
 
 export async function translateToBrazilianPortuguese(
@@ -299,26 +371,33 @@ export async function translateToBrazilianPortuguese(
     const translationPipeline = await loadTranslator(onProgress);
 
     reportProgress(onProgress, { stage: "translating" });
-    console.info("[Translation] Iniciando inferência");
+    const preparedText = `${TARGET_LANGUAGE_TOKEN} ${normalizedText}`;
+    console.info("[Translation] Entrada preparada", preparedText);
 
     const result: unknown = await withTimeout(
-      translationPipeline(`>>pt_BR<< ${normalizedText}`),
+      translationPipeline(preparedText),
       INFERENCE_TIMEOUT_MS,
       "A tradução excedeu o limite de 60 segundos. Tente novamente.",
     );
 
     console.info("[Translation] Resultado bruto", result);
 
-    const translatedText = extractTranslation(result);
+    const translatedText = extractTranslation(
+      result,
+      normalizedText,
+      preparedText,
+    );
 
     reportProgress(onProgress, { stage: "success" });
     return translatedText;
   } catch (error: unknown) {
+    console.error("[Translation] Erro original", error);
+
     const translationError =
       error instanceof TranslationError
         ? error
         : new TranslationError(
-            "Não foi possível traduzir o texto. Tente novamente.",
+            `Não foi possível traduzir o texto. Tente novamente.\nDetalhes: ${getSafeErrorMessage(error)}`,
             error,
           );
 
